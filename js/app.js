@@ -1,4 +1,4 @@
-// js/app.js — Отказоустойчивая точка входа (кнопки работают даже при блокировке IndexedDB)
+// js/app.js — Точка входа, роутинг, еженедельный автопересмотр на 8-й день и двойное подтверждение сброса
 import { getState, setState, subscribe } from './state.js';
 import {
   initDB,
@@ -10,8 +10,6 @@ import {
   saveWeightEntry,
   saveAdaptationLog,
   clearAllDatabase,
-  exportFullDatabaseJSON,
-  importFullDatabaseJSON,
   getSavedTheme,
   saveTheme
 } from './storage.js';
@@ -71,16 +69,19 @@ async function loadInitialData() {
     if (!profile) {
       switchScreen('profile');
     } else {
-      await checkAndRunAutoAdaptation();
+      await checkAndRunWeeklyAutoAdaptation();
     }
   } catch (err) {
     console.error('Ошибка инициализации хранилища:', err);
     setState({ selectedDate: getTodayISO() });
-    showToast('Локальная база загружена в режиме памяти', 'warning');
   }
 }
 
-async function checkAndRunAutoAdaptation() {
+/**
+ * Автоматически проверяет, наступил ли 8-й день с начала недели/прошлого пересмотра,
+ * и составляет новую программу из данных за прошлую неделю + рекомендаций из интернета.
+ */
+async function checkAndRunWeeklyAutoAdaptation() {
   if (isAutoAdapting) return;
   const state = getState();
   const evalRes = evaluateAdaptiveStatus(state);
@@ -96,7 +97,7 @@ async function checkAndRunAutoAdaptation() {
         profile: updatedProfile,
         adaptationLogs: [logEntry, ...state.adaptationLogs]
       });
-      showToast(`Авто-адаптация: программа перестроена (${logEntry.oldKcal} → ${logEntry.newKcal} ккал)`);
+      showToast(`Сформирована программа на Неделю ${updatedProfile.currentWeek}: ${logEntry.newKcal} ккал`);
     } finally {
       isAutoAdapting = false;
     }
@@ -114,6 +115,7 @@ function renderDashboardScreen() {
   const heroDiffEl = document.getElementById('dash-weight-diff');
   const heroBmiEl = document.getElementById('dash-bmi-val');
   const formulaBadgeEl = document.getElementById('dash-formula-badge');
+  const weekBadgeEl = document.getElementById('dash-week-badge');
   const safetyBannerEl = document.getElementById('dash-safety-banner');
 
   const ringContainer = document.getElementById('dash-progress-ring');
@@ -144,6 +146,12 @@ function renderDashboardScreen() {
   }
   if (formulaBadgeEl) {
     formulaBadgeEl.textContent = `${profile.formulaName} • BMR: ${profile.bmr} ккал • TDEE: ${profile.tdee} ккал`;
+  }
+  if (weekBadgeEl) {
+    const wNum = profile.currentWeek || 1;
+    weekBadgeEl.textContent = wNum <= 2
+      ? `Текущий этап: Неделя ${wNum} (Стартовый 2-недельный цикл)`
+      : `Текущий этап: Неделя ${wNum}`;
   }
 
   if (safetyBannerEl) {
@@ -246,7 +254,7 @@ function renderRecommendationsCard(profile) {
 
     ${internetBlock ? `
       <div style="margin-top:14px; padding:14px; border-radius:var(--radius-md); background:var(--accent-light); border:1px solid var(--accent);">
-        <div style="font-weight:700; font-size:0.9rem; margin-bottom:4px;">🌐 Протокол анти-плато (${internetBlock.sourceLabel})</div>
+        <div style="font-weight:700; font-size:0.9rem; margin-bottom:4px;">🌐 ${internetBlock.sourceLabel}</div>
         <p style="font-size:0.82rem; margin-bottom:8px;">${internetBlock.wikiNote}</p>
         <ul style="padding-left:18px; font-size:0.84rem; color:var(--text-primary);">
           ${internetBlock.protocolSteps.map(s => `<li>${s}</li>`).join('')}
@@ -312,23 +320,19 @@ function renderAdaptiveStatusBox() {
 
   const evalRes = evaluateAdaptiveStatus(state);
 
-  let badgeColor = 'var(--accent)';
-  if (evalRes.status === 'plateau' || evalRes.status === 'weight_gain') badgeColor = 'var(--warning)';
-  if (evalRes.status === 'missing_diary') badgeColor = 'var(--danger)';
-
   statusContainer.innerHTML = `
-    <div style="padding: 14px; border-radius: var(--radius-md); background: var(--bg-elevated); border-left: 4px solid ${badgeColor};">
+    <div style="padding: 14px; border-radius: var(--radius-md); background: var(--bg-elevated); border-left: 4px solid var(--accent);">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-        <div style="font-weight: 700;">Статус автоматического пересмотра (контроль каждые 14 дней):</div>
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-force-internet-rebuild">
-          🔄 Обновить программу через интернет сейчас
+        <div style="font-weight: 700;">Статус недельного цикла (автопересчёт каждый 8-й день):</div>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-force-next-week">
+          ⚡ Сформировать программу следующей недели сейчас (День 8)
         </button>
       </div>
       <p style="font-size: 0.88rem; color: var(--text-primary); margin-top: 6px;">${evalRes.message}</p>
     </div>
   `;
 
-  const forceBtn = statusContainer.querySelector('#btn-force-internet-rebuild');
+  const forceBtn = statusContainer.querySelector('#btn-force-next-week');
   if (forceBtn) {
     forceBtn.addEventListener('click', async () => {
       if (!state.profile) {
@@ -337,39 +341,47 @@ function renderAdaptiveStatusBox() {
         return;
       }
       forceBtn.disabled = true;
-      forceBtn.textContent = 'Синхронизация с онлайн-базой...';
-      const manualEval = {
-        status: 'plateau',
-        avgPrev: state.profile.currentWeight,
-        avgRecent: state.profile.currentWeight,
-        reductionPct: state.profile.isPediatric ? 5 : 6,
+      forceBtn.textContent = 'Анализ прошлой недели и поиск в интернете...';
+
+      const nextWeekNum = (state.profile.currentWeek || 1) + 1;
+      const delta = evalRes.deltaKg || 0;
+      const isStalled = delta >= -0.15;
+      const redPct = isStalled ? (state.profile.isPediatric ? 5 : 6) : 3;
+      const minSafe = state.profile.isPediatric
+        ? Math.round(state.profile.bmr * 1.05)
+        : Math.max(1200, Math.round(state.profile.bmr * 0.95));
+
+      const manualWeeklyEval = {
+        status: isStalled ? 'plateau' : 'weekly_update',
+        currentWeek: nextWeekNum,
+        avgPrev: evalRes.avgPrev || state.profile.currentWeight,
+        avgRecent: evalRes.avgRecent || state.profile.currentWeight,
+        reductionPct: redPct,
         oldKcal: state.profile.targetKcal,
-        proposedKcal: Math.max(
-          state.profile.isPediatric ? Math.round(state.profile.bmr * 1.05) : Math.max(1200, Math.round(state.profile.bmr * 0.95)),
-          Math.round(state.profile.targetKcal * 0.94)
-        ),
-        reasonLabel: 'Запрос пересчёта программы с онлайн-поиском'
+        proposedKcal: Math.max(minSafe, Math.round(state.profile.targetKcal * (1 - redPct / 100))),
+        reasonLabel: `Переход на Неделю ${nextWeekNum} (на основе данных за прошлую неделю)`
       };
-      const { updatedProfile, logEntry } = await applyProgramAdaptationWithInternet(state.profile, manualEval);
+
+      const { updatedProfile, logEntry } = await applyProgramAdaptationWithInternet(state.profile, manualWeeklyEval);
       await saveProfile(updatedProfile);
       await saveAdaptationLog(logEntry);
       setState({
         profile: updatedProfile,
         adaptationLogs: [logEntry, ...state.adaptationLogs]
       });
-      showToast('Новые рекомендации и программа загружены и применены!');
+      showToast(`Составлена и активирована программа на Неделю ${nextWeekNum}!`);
     });
   }
 
   if (logsContainer) {
     if (!state.adaptationLogs || state.adaptationLogs.length === 0) {
-      logsContainer.innerHTML = `<p style="font-size: 0.84rem; color: var(--text-muted);">Пересмотров программы пока не было.</p>`;
+      logsContainer.innerHTML = `<p style="font-size: 0.84rem; color: var(--text-muted);">История недельных программ пока пуста.</p>`;
     } else {
       logsContainer.innerHTML = state.adaptationLogs.map(log => `
         <div class="log-item">
           <div style="display:flex; justify-content:space-between; font-weight:700; flex-wrap:wrap; gap:6px;">
             <span>${log.date} — ${log.reason}</span>
-            <span class="mono" style="color:var(--accent);">${log.oldKcal} → ${log.newKcal} ккал (-${log.reductionPct}%)</span>
+            <span class="mono" style="color:var(--accent);">${log.oldKcal} → ${log.newKcal} ккал</span>
           </div>
           <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:2px;">${log.details || ''}</div>
         </div>
@@ -400,7 +412,7 @@ function initHeaderAndQuickActions() {
   if (resetBtn) {
     resetBtn.addEventListener('click', async () => {
       const step1 = window.confirm(
-        'ВНИМАНИЕ (Шаг 1 из 2): Вы действительно хотите полностью удалить профиль, всю историю взвешиваний, дневник питания и журнал адаптаций?'
+        'ВНИМАНИЕ (Шаг 1 из 2): Вы действительно хотите полностью удалить профиль, всю историю взвешиваний, дневник питания и историю недельных программ?'
       );
       if (!step1) return;
 
@@ -449,7 +461,7 @@ function initHeaderAndQuickActions() {
       ].sort((a, b) => a.date.localeCompare(b.date));
 
       let nextProfile = state.profile;
-      if (nextProfile && dateISO >= getTodayISO()) {
+      if (nextProfile) {
         const updatedMetrics = calculateDetailedBodyMetrics({
           weightKg: val,
           heightCm: nextProfile.height,
@@ -467,42 +479,8 @@ function initHeaderAndQuickActions() {
 
       setState({ weightHistory: nextWeights, profile: nextProfile });
       input.value = '';
-      showToast(`Вес ${val} кг за ${dateISO} сохранён`);
-      await checkAndRunAutoAdaptation();
-    });
-  }
-
-  const exportBtn = document.getElementById('btn-export-json');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', async () => {
-      const jsonStr = await exportFullDatabaseJSON();
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `nutriadapt-backup-${getTodayISO()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast('Резервная копия JSON скачана');
-    });
-  }
-
-  const importInput = document.getElementById('input-import-json');
-  const importBtn = document.getElementById('btn-import-json');
-  if (importBtn && importInput) {
-    importBtn.addEventListener('click', () => importInput.click());
-    importInput.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        await importFullDatabaseJSON(text);
-        await loadInitialData();
-        showToast('Данные успешно импортированы!');
-      } catch (err) {
-        showToast('Ошибка импорта JSON: ' + err.message, 'error');
-      }
-      importInput.value = '';
+      showToast(`Вес ${val} кг за ${dateISO} сохранён и учтён в программе`);
+      await checkAndRunWeeklyAutoAdaptation();
     });
   }
 }
