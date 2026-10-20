@@ -1,4 +1,4 @@
-// js/storage.js — Хранение данных в IndexedDB + тема в localStorage + экспорт/импорт JSON + полный сброс
+// js/storage.js — Хранение данных в IndexedDB + тема в localStorage + полный сброс
 const DB_NAME = 'NutriAdaptDB';
 const DB_VERSION = 1;
 
@@ -132,56 +132,6 @@ export async function clearAllDatabase() {
   tx.objectStore('meals').clear();
   tx.objectStore('weights').clear();
   tx.objectStore('adaptations').clear();
-
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function exportFullDatabaseJSON() {
-  const [profile, meals, weights, adaptations] = await Promise.all([
-    getProfile(),
-    getAllMeals(),
-    getAllWeights(),
-    getAllAdaptationLogs()
-  ]);
-  return JSON.stringify({
-    app: 'NutriAdapt',
-    version: 2,
-    exportedAt: new Date().toISOString(),
-    profile,
-    meals,
-    weights,
-    adaptations
-  }, null, 2);
-}
-
-export async function importFullDatabaseJSON(jsonString) {
-  const parsed = JSON.parse(jsonString);
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Некорректный формат JSON файла.');
-  }
-  const db = await initDB();
-  const tx = db.transaction(['profile', 'meals', 'weights', 'adaptations'], 'readwrite');
-
-  tx.objectStore('profile').clear();
-  tx.objectStore('meals').clear();
-  tx.objectStore('weights').clear();
-  tx.objectStore('adaptations').clear();
-
-  if (parsed.profile) {
-    tx.objectStore('profile').put({ ...parsed.profile, id: 'main' });
-  }
-  if (Array.isArray(parsed.meals)) {
-    for (const m of parsed.meals) tx.objectStore('meals').put(m);
-  }
-  if (Array.isArray(parsed.weights)) {
-    for (const w of parsed.weights) tx.objectStore('weights').put(w);
-  }
-  if (Array.isArray(parsed.adaptations)) {
-    for (const a of parsed.adaptations) tx.objectStore('adaptations').put(a);
-  }
 
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve(true);
