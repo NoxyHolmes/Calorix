@@ -23,9 +23,6 @@
       </div>
 
       <div class="header-actions">
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-load-demo" title="Заполнить пример за 14 дней с эффектом плато">
-          Демо 14 дней
-        </button>
         <button type="button" class="btn btn-secondary btn-sm" id="btn-export-json">
           Экспорт JSON
         </button>
@@ -33,6 +30,9 @@
           Импорт JSON
         </button>
         <input type="file" id="input-import-json" accept="application/json" style="display:none;" />
+        <button type="button" class="btn btn-danger btn-sm" id="btn-reset-all" title="Полный сброс данных с двойным подтверждением">
+          Сброс данных 🗑️
+        </button>
         <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-theme" aria-label="Тема">
           Тема 🌓
         </button>
@@ -42,7 +42,7 @@
     <!-- Навигация по экранам -->
     <nav class="nav-tabs" aria-label="Основная навигация">
       <button type="button" class="nav-tab active" data-screen="dashboard">
-        <span>📊</span> <span>Дашборд</span>
+        <span>📊</span> <span>Дашборд и аналитика</span>
       </button>
       <button type="button" class="nav-tab" data-screen="diary">
         <span>🍽️</span> <span>Дневник питания</span>
@@ -82,7 +82,7 @@
 
           <form id="quick-weight-form" style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <input type="date" id="quick-weight-date" class="form-input mono" style="flex:1; min-width:135px;" required />
-            <input type="number" id="quick-weight-input" class="form-input mono" placeholder="Утренний вес (кг)" min="15" max="300" step="0.1" style="flex:1; min-width:140px;" required />
+            <input type="number" id="quick-weight-input" class="form-input mono" placeholder="Вес за выбранную дату (кг)" min="15" max="300" step="0.1" style="flex:1; min-width:140px;" required />
             <button type="submit" class="btn btn-primary">Записать вес</button>
           </form>
         </div>
@@ -130,11 +130,37 @@
           </div>
         </div>
 
+        <!-- Карточка: Степень ожирения, % жира и состав тела -->
+        <div class="card col-12">
+          <div class="card-header">
+            <h2 class="card-title">Диагностика ИМТ, степени ожирения и состава тела</h2>
+            <span style="font-size:0.8rem; color:var(--text-secondary);">На основе роста, текущего веса, возраста и пола</span>
+          </div>
+          <div id="body-composition-box"></div>
+        </div>
+
+        <!-- Карточка: Рекомендательная программа по занятиям и питанию -->
+        <div class="card col-12">
+          <div class="card-header">
+            <h2 class="card-title">Персональная программа тренировок и питания</h2>
+            <span style="font-size:0.8rem; color:var(--text-secondary);">Автоматически адаптируется под ваш ИМТ, возраст и стадию снижения веса</span>
+          </div>
+          <div id="recommendations-box"></div>
+        </div>
+
+        <!-- Карточка: Расширенная статистика и прогноз -->
+        <div class="card col-12">
+          <div class="card-header">
+            <h2 class="card-title">Статистика дисциплины, дефицита и прогноз достижения цели</h2>
+          </div>
+          <div id="extended-stats-box"></div>
+        </div>
+
         <!-- Карточка: Адаптивная программа (контроль плато и роста веса) -->
         <div class="card col-12">
           <div class="card-header">
             <h2 class="card-title">Адаптивная система пересмотра калорийности</h2>
-            <span style="font-size:0.8rem; color:var(--text-secondary);">Анализ среднего веса: текущие 7 дней против прошлых 7 дней</span>
+            <span style="font-size:0.8rem; color:var(--text-secondary);">Автоматическая перестройка при застое веса за 2 недели с онлайн-поиском</span>
           </div>
 
           <div id="adaptive-status-box" style="margin-bottom:16px;"></div>
@@ -166,19 +192,25 @@
       </div>
     </section>
 
-    <!-- ЭКРАН 2: ДНЕВНИК ПИТАНИЯ -->
+    <!-- ЭКРАН 2: ДНЕВНИК ПИТАНИЯ (с выбором любой пропущенной даты) -->
     <section id="screen-diary" class="screen">
       <div class="card">
         <div class="diary-controls">
-          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-            <h2 class="card-title">Дневник питания</h2>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <h2 class="card-title" style="margin-right:6px;">Дневник питания</h2>
+            <button type="button" class="btn btn-secondary btn-sm" id="diary-prev-day">← Пред. день</button>
             <input type="date" id="diary-date-input" class="form-input mono" />
-            <span id="diary-date-formatted" style="font-weight:600; color:var(--text-secondary);"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="diary-next-day">След. день →</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="diary-yesterday-btn">Вчера</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="diary-today-btn">Сегодня</button>
+            <span id="diary-date-formatted" style="font-weight:700; color:var(--accent); margin-left:4px;"></span>
           </div>
           <button type="button" class="btn btn-primary" id="btn-add-meal-row">
-            + Добавить приём пищи
+            + Добавить приём пищи в выбранную дату
           </button>
         </div>
+
+        <div id="diary-past-date-notice" class="alert-banner alert-warning" style="display:none;"></div>
 
         <div id="diary-day-summary" style="padding:14px; background:var(--bg-elevated); border-radius:var(--radius-md); margin-bottom:16px;"></div>
 
