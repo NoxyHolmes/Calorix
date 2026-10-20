@@ -1,4 +1,4 @@
-// js/app.js — Точка входа, роутинг, двойное подтверждение сброса, авто-адаптация через интернет и аналитика
+// js/app.js — Отказоустойчивая точка входа (кнопки работают даже при блокировке IndexedDB)
 import { getState, setState, subscribe } from './state.js';
 import {
   initDB,
@@ -29,46 +29,57 @@ import { initOnboardingModule, populateProfileForm } from './onboarding.js';
 
 let isAutoAdapting = false;
 
-async function loadInitialData() {
-  await initDB();
-  const [profile, allMeals, weights, adaptations] = await Promise.all([
-    getProfile(),
-    getAllMeals(),
-    getAllWeights(),
-    getAllAdaptationLogs()
-  ]);
-
-  const mealsByDate = {};
-  for (const m of allMeals) {
-    if (!mealsByDate[m.date]) mealsByDate[m.date] = [];
-    mealsByDate[m.date].push(m);
-  }
-
-  const theme = getSavedTheme();
-  document.documentElement.setAttribute('data-theme', theme);
-
-  setState({
-    profile,
-    selectedDate: getTodayISO(),
-    mealsByDate,
-    weightHistory: weights,
-    adaptationLogs: adaptations,
-    theme
+export function switchScreen(screenId) {
+  document.querySelectorAll('.nav-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.screen === screenId);
   });
+  document.querySelectorAll('.screen').forEach(sec => {
+    sec.classList.toggle('active', sec.id === `screen-${screenId}`);
+  });
+}
 
-  populateProfileForm();
+async function loadInitialData() {
+  try {
+    await initDB();
+    const [profile, allMeals, weights, adaptations] = await Promise.all([
+      getProfile(),
+      getAllMeals(),
+      getAllWeights(),
+      getAllAdaptationLogs()
+    ]);
 
-  if (!profile) {
-    switchScreen('profile');
-  } else {
-    await checkAndRunAutoAdaptation();
+    const mealsByDate = {};
+    for (const m of allMeals) {
+      if (!mealsByDate[m.date]) mealsByDate[m.date] = [];
+      mealsByDate[m.date].push(m);
+    }
+
+    const theme = getSavedTheme();
+    document.documentElement.setAttribute('data-theme', theme);
+
+    setState({
+      profile,
+      selectedDate: getTodayISO(),
+      mealsByDate,
+      weightHistory: weights,
+      adaptationLogs: adaptations,
+      theme
+    });
+
+    populateProfileForm();
+
+    if (!profile) {
+      switchScreen('profile');
+    } else {
+      await checkAndRunAutoAdaptation();
+    }
+  } catch (err) {
+    console.error('Ошибка инициализации хранилища:', err);
+    setState({ selectedDate: getTodayISO() });
+    showToast('Локальная база загружена в режиме памяти', 'warning');
   }
 }
 
-/**
- * Автоматически перестраивает программу и ищет рекомендации в интернете,
- * если за 2 недели вес не изменился или вырос.
- */
 async function checkAndRunAutoAdaptation() {
   if (isAutoAdapting) return;
   const state = getState();
@@ -92,15 +103,6 @@ async function checkAndRunAutoAdaptation() {
   }
 }
 
-function switchScreen(screenId) {
-  document.querySelectorAll('.nav-tab').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.screen === screenId);
-  });
-  document.querySelectorAll('.screen').forEach(sec => {
-    sec.classList.toggle('active', sec.id === `screen-${screenId}`);
-  });
-}
-
 function renderDashboardScreen() {
   const state = getState();
   const profile = state.profile;
@@ -114,9 +116,13 @@ function renderDashboardScreen() {
   const formulaBadgeEl = document.getElementById('dash-formula-badge');
   const safetyBannerEl = document.getElementById('dash-safety-banner');
 
+  const ringContainer = document.getElementById('dash-progress-ring');
+  renderProgressRing(ringContainer, totals.kcal, profile ? profile.targetKcal : 2000);
+
   if (!profile) {
     if (heroCurrentEl) heroCurrentEl.textContent = '— кг';
     if (heroTargetEl) heroTargetEl.textContent = '— кг';
+    renderAllCharts();
     return;
   }
 
@@ -154,10 +160,6 @@ function renderDashboardScreen() {
       safetyBannerEl.style.display = 'none';
     }
   }
-
-  // Кольцо калорий за сегодня
-  const ringContainer = document.getElementById('dash-progress-ring');
-  renderProgressRing(ringContainer, totals.kcal, profile.targetKcal);
 
   const updateMacroBar = (prefix, currentVal, targetVal) => {
     const labelEl = document.getElementById(`macro-${prefix}-val`);
@@ -206,7 +208,7 @@ function renderBodyCompositionCard(metrics, profile) {
         <div class="stat-value" style="font-size:1.25rem; color:${excessBadgeColor};">${excessSign}</div>
         <div class="stat-sub">
           Норма для роста: <strong>${metrics.idealWeightMin}–${metrics.idealWeightMax} кг</strong>
-          ${metrics.excessWeightKg > 0 ? `(избыток above нормы: ${metrics.excessWeightKg} кг)` : '(в пределах нормы)'}
+          ${metrics.excessWeightKg > 0 ? `(избыток выше нормы: ${metrics.excessWeightKg} кг)` : '(в пределах нормы)'}
         </div>
       </div>
     </div>
@@ -329,7 +331,11 @@ function renderAdaptiveStatusBox() {
   const forceBtn = statusContainer.querySelector('#btn-force-internet-rebuild');
   if (forceBtn) {
     forceBtn.addEventListener('click', async () => {
-      if (!state.profile) return;
+      if (!state.profile) {
+        showToast('Сначала заполните и сохраните профиль!', 'warning');
+        switchScreen('profile');
+        return;
+      }
       forceBtn.disabled = true;
       forceBtn.textContent = 'Синхронизация с онлайн-базой...';
       const manualEval = {
@@ -382,7 +388,7 @@ function initHeaderAndQuickActions() {
   const themeBtn = document.getElementById('btn-toggle-theme');
   if (themeBtn) {
     themeBtn.addEventListener('click', () => {
-      const curr = getState().theme;
+      const curr = document.documentElement.getAttribute('data-theme') || 'light';
       const next = curr === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
       saveTheme(next);
@@ -390,17 +396,14 @@ function initHeaderAndQuickActions() {
     });
   }
 
-  // СБРОС ВСЕХ ДАННЫХ С ДВОЙНЫМ ПОДТВЕРЖДЕНИЕМ
   const resetBtn = document.getElementById('btn-reset-all');
   if (resetBtn) {
     resetBtn.addEventListener('click', async () => {
-      // Шаг 1: Первое подтверждение
       const step1 = window.confirm(
         'ВНИМАНИЕ (Шаг 1 из 2): Вы действительно хотите полностью удалить профиль, всю историю взвешиваний, дневник питания и журнал адаптаций?'
       );
       if (!step1) return;
 
-      // Шаг 2: Второе подтверждение с вводом контрольного слова
       const step2 = window.prompt(
         'ПОДТВЕРЖДЕНИЕ (Шаг 2 из 2): Это действие необратимо. Введите слово УДАЛИТЬ заглавными буквами для полного сброса:'
       );
@@ -422,7 +425,6 @@ function initHeaderAndQuickActions() {
     });
   }
 
-  // Быстрое логирование веса за любую дату
   const quickWeightForm = document.getElementById('quick-weight-form');
   if (quickWeightForm) {
     quickWeightForm.addEventListener('submit', async (e) => {
@@ -470,7 +472,6 @@ function initHeaderAndQuickActions() {
     });
   }
 
-  // Экспорт JSON
   const exportBtn = document.getElementById('btn-export-json');
   if (exportBtn) {
     exportBtn.addEventListener('click', async () => {
@@ -486,7 +487,6 @@ function initHeaderAndQuickActions() {
     });
   }
 
-  // Импорт JSON
   const importInput = document.getElementById('input-import-json');
   const importBtn = document.getElementById('btn-import-json');
   if (importBtn && importInput) {
@@ -507,15 +507,15 @@ function initHeaderAndQuickActions() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function bootstrapApp() {
+  const quickDateInput = document.getElementById('quick-weight-date');
+  if (quickDateInput) quickDateInput.value = getTodayISO();
+
   initHeaderAndQuickActions();
   initOnboardingModule();
   initDiaryModule();
   initCalendarModule();
   initChartsModule();
-
-  const quickDateInput = document.getElementById('quick-weight-date');
-  if (quickDateInput) quickDateInput.value = getTodayISO();
 
   subscribe(() => {
     renderDashboardScreen();
@@ -524,4 +524,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await loadInitialData();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootstrapApp);
+} else {
+  bootstrapApp();
+}
