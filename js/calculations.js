@@ -1,12 +1,6 @@
-// js/calculations.js — Изолированный модуль расчётов BMR, TDEE, дефицита, БЖУ и ИМТ (6–50 лет)
+// js/calculations.js — Расчёт BMR, TDEE, степени ожирения, % жира в организме, идеального веса и БЖУ
 import { round1 } from './utils.js';
 
-/**
- * Расчёт базового обмена (BMR / REE) строго по возрастной группе:
- * - 6–10 лет: педиатрическая формула ВОЗ/FAO/UNU
- * - 10–18 лет: педиатрическая формула ВОЗ/FAO/UNU для подростков
- * - 18–50 лет: формула Миффлина — Сан Жеора
- */
 export function calculateBMR({ age, gender, weightKg, heightCm }) {
   const a = Number(age);
   const w = Number(weightKg);
@@ -49,20 +43,104 @@ export function calculateTDEE(bmr, activityMultiplier) {
   return Math.round(Number(bmr) * Number(activityMultiplier || 1.375));
 }
 
-export function calculateBMI(weightKg, heightCm) {
-  const hMeters = Number(heightCm) / 100;
-  if (!hMeters) return { bmi: 0, category: '—' };
-  const bmi = round1(Number(weightKg) / (hMeters * hMeters));
-  let category = 'Норма';
-  if (bmi < 18.5) category = 'Дефицит массы';
-  else if (bmi >= 25 && bmi < 30) category = 'Избыточная масса';
-  else if (bmi >= 30) category = 'Ожирение';
-  return { bmi, category };
+/**
+ * Детальный расчёт ИМТ, степени ожирения, % жира в организме, сухой массы и идеального веса
+ */
+export function calculateDetailedBodyMetrics({ weightKg, heightCm, age, gender }) {
+  const w = Number(weightKg);
+  const h = Number(heightCm);
+  const a = Number(age);
+  const isMale = gender === 'male';
+  const hMeters = h / 100;
+
+  if (!hMeters || !w) {
+    return {
+      bmi: 0,
+      category: '—',
+      obesityDegree: 'Нет данных',
+      riskLevel: 'Низкий',
+      bodyFatPct: 0,
+      fatMassKg: 0,
+      leanMassKg: 0,
+      idealWeightMin: 0,
+      idealWeightMax: 0,
+      idealWeightMid: 0,
+      excessWeightKg: 0,
+      excessWeightPct: 0
+    };
+  }
+
+  const bmi = round1(w / (hMeters * hMeters));
+
+  let category = 'Нормальная масса тела';
+  let obesityDegree = 'Отсутствует (Норма)';
+  let riskLevel = 'Минимальный';
+
+  if (bmi < 16) {
+    category = 'Выраженный дефицит массы';
+    obesityDegree = 'Дефицит III ст.';
+    riskLevel = 'Повышенный (истощение)';
+  } else if (bmi >= 16 && bmi < 18.5) {
+    category = 'Недостаточная масса тела';
+    obesityDegree = 'Дефицит массы';
+    riskLevel = 'Умеренный';
+  } else if (bmi >= 18.5 && bmi < 25) {
+    category = 'Нормальная масса тела';
+    obesityDegree = 'Ожирение отсутствует';
+    riskLevel = 'Норма (минимальный риск)';
+  } else if (bmi >= 25 && bmi < 30) {
+    category = 'Избыточная масса тела';
+    obesityDegree = 'Предожирение (Избыточный вес)';
+    riskLevel = 'Повышенный';
+  } else if (bmi >= 30 && bmi < 35) {
+    category = 'Ожирение I степени';
+    obesityDegree = 'Ожирение I степени';
+    riskLevel = 'Высокий';
+  } else if (bmi >= 35 && bmi < 40) {
+    category = 'Ожирение II степени';
+    obesityDegree = 'Ожирение II степени';
+    riskLevel = 'Очень высокий';
+  } else {
+    category = 'Ожирение III степени (морбидное)';
+    obesityDegree = 'Ожирение III степени';
+    riskLevel = 'Крайне высокий';
+  }
+
+  // Расчёт % жира в организме по формуле Deurenberg (с учётом возраста и пола)
+  const sexFactor = isMale ? 1 : 0;
+  const rawBodyFat = a < 18
+    ? (1.51 * bmi) - (0.70 * a) - (3.6 * sexFactor) + 1.4
+    : (1.20 * bmi) + (0.23 * a) - (10.8 * sexFactor) - 5.4;
+
+  const bodyFatPct = round1(Math.min(60, Math.max(5, rawBodyFat)));
+  const fatMassKg = round1((w * bodyFatPct) / 100);
+  const leanMassKg = round1(w - fatMassKg);
+
+  // Коридор идеального веса по ВОЗ (ИМТ 18.5 – 24.9, оптимум 21.7)
+  const idealWeightMin = round1(18.5 * hMeters * hMeters);
+  const idealWeightMax = round1(24.9 * hMeters * hMeters);
+  const idealWeightMid = round1(21.7 * hMeters * hMeters);
+
+  // Отклонение от верхней границы нормы и от оптимума в кг и %
+  const excessWeightKg = w > idealWeightMax ? round1(w - idealWeightMax) : 0;
+  const excessWeightPct = round1(((w - idealWeightMid) / idealWeightMid) * 100);
+
+  return {
+    bmi,
+    category,
+    obesityDegree,
+    riskLevel,
+    bodyFatPct,
+    fatMassKg,
+    leanMassKg,
+    idealWeightMin,
+    idealWeightMax,
+    idealWeightMid,
+    excessWeightKg,
+    excessWeightPct
+  };
 }
 
-/**
- * Расчёт целевой калорийности и БЖУ с учётом ограничений безопасности для детей и взрослых
- */
 export function buildNutritionProgram({ age, gender, height, currentWeight, targetWeight, activity, deficitPct }) {
   const { bmr, formulaName, ageGroup, isPediatric } = calculateBMR({
     age,
@@ -74,7 +152,6 @@ export function buildNutritionProgram({ age, gender, height, currentWeight, targ
   const tdee = calculateTDEE(bmr, activity);
   const requestedDeficit = Number(deficitPct);
 
-  // Рекомендуемый безопасный порог: для детей 6–18 лет — 10–15%, для взрослых — 15–20%
   const safeMaxDeficit = isPediatric ? 15 : 20;
   const exceedsSafePediatricDeficit = isPediatric && requestedDeficit > 15;
   const exceedsSafeAdultDeficit = !isPediatric && requestedDeficit > 22;
@@ -83,9 +160,6 @@ export function buildNutritionProgram({ age, gender, height, currentWeight, targ
   const minFloorKcal = isPediatric ? Math.round(bmr * 1.05) : Math.max(1200, Math.round(bmr * 0.95));
   const targetKcal = Math.max(minFloorKcal, targetKcalRaw);
 
-  // Макронутриенты:
-  // Взрослые: белок 1.8 г/кг (в диапазоне 1.6-2.2 г/кг), жиры 28% калорий (>= 25%), углеводы — остаток
-  // Дети и подростки: сбалансированный профиль (белок 1.4 г/кг, жиры 30% калорий, углеводы — остаток)
   const proteinPerKg = isPediatric ? 1.4 : 1.8;
   const fatCalorieShare = isPediatric ? 0.30 : 0.28;
 
@@ -98,7 +172,12 @@ export function buildNutritionProgram({ age, gender, height, currentWeight, targ
   const carbsKcal = Math.max(120, targetKcal - proteinKcal - fatKcal);
   const carbsGrams = Math.round(carbsKcal / 4);
 
-  const { bmi, category: bmiCategory } = calculateBMI(currentWeight, height);
+  const bodyMetrics = calculateDetailedBodyMetrics({
+    weightKg: currentWeight,
+    heightCm: height,
+    age,
+    gender
+  });
 
   return {
     bmr,
@@ -117,14 +196,14 @@ export function buildNutritionProgram({ age, gender, height, currentWeight, targ
       fat: fatGrams,
       carbs: carbsGrams
     },
-    bmi,
-    bmiCategory
+    ...bodyMetrics,
+    bmiCategory: bodyMetrics.category
   };
 }
 
-export function recalculateMacrosForKcal(targetKcal, weightKg, isPediatric) {
-  const proteinPerKg = isPediatric ? 1.4 : 1.8;
-  const fatCalorieShare = isPediatric ? 0.30 : 0.28;
+export function recalculateMacrosForKcal(targetKcal, weightKg, isPediatric, boostProtein = false) {
+  const proteinPerKg = isPediatric ? 1.45 : (boostProtein ? 2.0 : 1.8);
+  const fatCalorieShare = isPediatric ? 0.30 : 0.27;
 
   const proteinGrams = Math.round(Number(weightKg) * proteinPerKg);
   const fatGrams = Math.round((targetKcal * fatCalorieShare) / 9);
