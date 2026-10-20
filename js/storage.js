@@ -1,4 +1,4 @@
-// js/storage.js — Хранение данных в IndexedDB + тема в localStorage + экспорт/импорт JSON
+// js/storage.js — Хранение данных в IndexedDB + тема в localStorage + экспорт/импорт JSON + полный сброс
 const DB_NAME = 'NutriAdaptDB';
 const DB_VERSION = 1;
 
@@ -125,6 +125,20 @@ export async function getAllAdaptationLogs() {
   });
 }
 
+export async function clearAllDatabase() {
+  const db = await initDB();
+  const tx = db.transaction(['profile', 'meals', 'weights', 'adaptations'], 'readwrite');
+  tx.objectStore('profile').clear();
+  tx.objectStore('meals').clear();
+  tx.objectStore('weights').clear();
+  tx.objectStore('adaptations').clear();
+
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function exportFullDatabaseJSON() {
   const [profile, meals, weights, adaptations] = await Promise.all([
     getProfile(),
@@ -134,7 +148,7 @@ export async function exportFullDatabaseJSON() {
   ]);
   return JSON.stringify({
     app: 'NutriAdapt',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     profile,
     meals,
