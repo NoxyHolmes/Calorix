@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NutriAdapt — Адаптивное управление весом и питанием (6–50 лет)</title>
+  <link rel="stylesheet" href="./css/base.css" />
+  <link rel="stylesheet" href="./css/layout.css" />
+  <link rel="stylesheet" href="./css/components.css" />
+  <link rel="stylesheet" href="./css/calendar.css" />
+  <link rel="stylesheet" href="./css/animations.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Шапка приложения -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">N</div>
+        <div>
+          <span class="brand-title">NutriAdapt</span>
+          <span class="brand-subtitle">Адаптивная система снижения веса • 6–50 лет</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-load-demo" title="Заполнить пример за 14 дней с эффектом плато">
+          Демо 14 дней
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-export-json">
+          Экспорт JSON
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-import-json">
+          Импорт JSON
+        </button>
+        <input type="file" id="input-import-json" accept="application/json" style="display:none;" />
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-theme" aria-label="Тема">
+          Тема 🌓
+        </button>
+      </div>
+    </header>
+
+    <!-- Навигация по экранам -->
+    <nav class="nav-tabs" aria-label="Основная навигация">
+      <button type="button" class="nav-tab active" data-screen="dashboard">
+        <span>📊</span> <span>Дашборд</span>
+      </button>
+      <button type="button" class="nav-tab" data-screen="diary">
+        <span>🍽️</span> <span>Дневник питания</span>
+      </button>
+      <button type="button" class="nav-tab" data-screen="calendar">
+        <span>📅</span> <span>Календарь и история</span>
+      </button>
+      <button type="button" class="nav-tab" data-screen="profile">
+        <span>⚙️</span> <span>Профиль и программа</span>
+      </button>
+    </nav>
+
+    <!-- ЭКРАН 1: ДАШБОРД -->
+    <section id="screen-dashboard" class="screen active">
+      <div id="dash-safety-banner" class="alert-banner alert-warning" style="display:none;"></div>
+
+      <div class="dashboard-grid">
+        <!-- Карточка: Текущий вес -> Цель -->
+        <div class="card col-6">
+          <div class="card-header">
+            <h2 class="card-title">Текущий вес → Цель</h2>
+            <span id="dash-formula-badge" style="font-size:0.75rem; color:var(--text-muted);"></span>
+          </div>
+
+          <div class="hero-weight-stats">
+            <div class="stat-box">
+              <div class="stat-label">Текущий вес</div>
+              <div class="stat-value" id="dash-current-weight">— кг</div>
+              <div class="stat-sub" id="dash-weight-diff">Заполните профиль</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Целевой вес</div>
+              <div class="stat-value" style="color:var(--accent);" id="dash-target-weight">— кг</div>
+              <div class="stat-sub">ИМТ: <span id="dash-bmi-val">—</span></div>
+            </div>
+          </div>
+
+          <form id="quick-weight-form" style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input type="date" id="quick-weight-date" class="form-input mono" style="flex:1; min-width:135px;" required />
+            <input type="number" id="quick-weight-input" class="form-input mono" placeholder="Утренний вес (кг)" min="15" max="300" step="0.1" style="flex:1; min-width:140px;" required />
+            <button type="submit" class="btn btn-primary">Записать вес</button>
+          </form>
+        </div>
+
+        <!-- Карточка: Кольцо прогресса за сегодня + БЖУ -->
+        <div class="card col-6">
+          <div class="card-header">
+            <h2 class="card-title">Баланс калорий и БЖУ за сегодня</h2>
+          </div>
+
+          <div class="nutrition-summary-wrap">
+            <div id="dash-progress-ring"></div>
+
+            <div class="macros-bars">
+              <div class="macro-item">
+                <div class="macro-header">
+                  <span>Белки</span>
+                  <span class="mono" id="macro-p-val">0 / 0 г</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" id="macro-p-fill" style="width:0%;"></div>
+                </div>
+              </div>
+
+              <div class="macro-item">
+                <div class="macro-header">
+                  <span>Жиры</span>
+                  <span class="mono" id="macro-f-val">0 / 0 г</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" id="macro-f-fill" style="width:0%; background:var(--warning);"></div>
+                </div>
+              </div>
+
+              <div class="macro-item">
+                <div class="macro-header">
+                  <span>Углеводы</span>
+                  <span class="mono" id="macro-c-val">0 / 0 г</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" id="macro-c-fill" style="width:0%; background:var(--info);"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Карточка: Адаптивная программа (контроль плато и роста веса) -->
+        <div class="card col-12">
+          <div class="card-header">
+            <h2 class="card-title">Адаптивная система пересмотра калорийности</h2>
+            <span style="font-size:0.8rem; color:var(--text-secondary);">Анализ среднего веса: текущие 7 дней против прошлых 7 дней</span>
+          </div>
+
+          <div id="adaptive-status-box" style="margin-bottom:16px;"></div>
+
+          <h3 style="font-size:0.92rem; margin-bottom:8px;">Журнал изменений цели (История адаптаций):</h3>
+          <div class="log-list" id="adaptation-logs-list"></div>
+        </div>
+
+        <!-- Карточка: График веса -->
+        <div class="card col-6">
+          <div class="card-header">
+            <h2 class="card-title">Динамика веса</h2>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn btn-secondary btn-sm chart-range-btn" data-days="7">7 дн.</button>
+              <button type="button" class="btn btn-secondary btn-sm chart-range-btn active" data-days="14">14 дн.</button>
+              <button type="button" class="btn btn-secondary btn-sm chart-range-btn" data-days="30">30 дн.</button>
+            </div>
+          </div>
+          <div id="weight-chart-container"></div>
+        </div>
+
+        <!-- Карточка: График калорий за 7 дней -->
+        <div class="card col-6">
+          <div class="card-header">
+            <h2 class="card-title">Потребление калорий (последние 7 дней)</h2>
+          </div>
+          <div id="calories-chart-container"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ЭКРАН 2: ДНЕВНИК ПИТАНИЯ -->
+    <section id="screen-diary" class="screen">
+      <div class="card">
+        <div class="diary-controls">
+          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <h2 class="card-title">Дневник питания</h2>
+            <input type="date" id="diary-date-input" class="form-input mono" />
+            <span id="diary-date-formatted" style="font-weight:600; color:var(--text-secondary);"></span>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-add-meal-row">
+            + Добавить приём пищи
+          </button>
+        </div>
+
+        <div id="diary-day-summary" style="padding:14px; background:var(--bg-elevated); border-radius:var(--radius-md); margin-bottom:16px;"></div>
+
+        <div id="diary-meals-list" class="meals-list"></div>
+      </div>
+    </section>
+
+    <!-- ЭКРАН 3: КАЛЕНДАРЬ И ИСТОРИЯ -->
+    <section id="screen-calendar" class="screen">
+      <div class="calendar-layout">
+        <div class="card">
+          <div class="calendar-toolbar">
+            <button type="button" class="btn btn-secondary btn-sm" id="cal-prev-month">← Пред.</button>
+            <h2 class="card-title" id="cal-month-title">Месяц</h2>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="cal-today-btn">Сегодня</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="cal-next-month">След. →</button>
+            </div>
+          </div>
+
+          <div class="calendar-weekdays">
+            <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
+          </div>
+          <div id="calendar-days-grid" class="calendar-grid"></div>
+        </div>
+
+        <div class="card" id="calendar-day-detail"></div>
+      </div>
+    </section>
+
+    <!-- ЭКРАН 4: ПРОФИЛЬ И РАСЧЁТ ПРОГРАММЫ -->
+    <section id="screen-profile" class="screen">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Параметры пользователя и расчёт программы (6–50 лет)</h2>
+        </div>
+
+        <div class="alert-banner alert-warning">
+          <div>
+            <strong>Медицинский дисклеймер:</strong> Приложение носит информационно-справочный характер и не заменяет консультацию врача.
+            Для детей и подростков (6–18 лет) любые изменения рациона и снижение веса должны проводиться <strong>строго после консультации с врачом-педиатром</strong>.
+          </div>
+        </div>
+
+        <div id="pediatric-live-warning" class="alert-banner alert-warning" style="display:none;"></div>
+
+        <form id="profile-form" novalidate>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="input-age">Возраст (строго 6–50 лет)</label>
+              <input type="number" id="input-age" class="form-input mono" min="6" max="50" step="1" value="28" required />
+              <div class="form-error" id="err-age"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-gender">Пол</label>
+              <select id="input-gender" class="form-select">
+                <option value="female">Женский / Девочка</option>
+                <option value="male">Мужской / Мальчик</option>
+              </select>
+              <div class="form-error" id="err-gender"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-height">Рост (см)</label>
+              <input type="number" id="input-height" class="form-input mono" min="90" max="230" step="1" value="170" required />
+              <div class="form-error" id="err-height"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-current-weight">Текущий вес (кг)</label>
+              <input type="number" id="input-current-weight" class="form-input mono" min="15" max="300" step="0.1" value="75.0" required />
+              <div class="form-error" id="err-currentWeight"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-target-weight">Целевой вес (кг)</label>
+              <input type="number" id="input-target-weight" class="form-input mono" min="15" max="300" step="0.1" value="65.0" required />
+              <div class="form-error" id="err-targetWeight"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-activity">Уровень физической активности</label>
+              <select id="input-activity" class="form-select">
+                <option value="1.2">Сидячий образ жизни (×1.2)</option>
+                <option value="1.375" selected>Лёгкая активность 1–3 раза в нед. (×1.375)</option>
+                <option value="1.55">Умеренная активность 3–5 раз в нед. (×1.55)</option>
+                <option value="1.725">Высокая активность 6–7 раз в нед. (×1.725)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-deficit">Начальный дефицит калорий (%)</label>
+              <input type="number" id="input-deficit" class="form-input mono" min="5" max="30" step="1" value="15" required />
+              <small style="font-size:0.75rem; color:var(--text-muted);">Рекомендуется: 10–15% для детей (6–18 лет), 15–20% для взрослых</small>
+              <div class="form-error" id="err-deficitPct"></div>
+            </div>
+          </div>
+
+          <div style="margin-top:20px; display:flex; gap:12px;">
+            <button type="submit" class="btn btn-primary">Рассчитать и сохранить программу</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <!-- Контейнер для всплывающих уведомлений -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

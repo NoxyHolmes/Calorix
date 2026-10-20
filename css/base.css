@@ -1,0 +1,97 @@
+/* css/base.css — Переменные, сброс, типографика и темы */
+:root {
+  --bg-primary: #f6f9f8;
+  --bg-surface: #ffffff;
+  --bg-elevated: #edf4f1;
+  --text-primary: #12211c;
+  --text-secondary: #4e635c;
+  --text-muted: #7c9089;
+  --accent: #10b981;
+  --accent-hover: #059669;
+  --accent-light: rgba(16, 185, 129, 0.14);
+  --danger: #ef4444;
+  --danger-light: rgba(239, 68, 68, 0.12);
+  --warning: #f59e0b;
+  --warning-light: rgba(245, 158, 11, 0.14);
+  --info: #3b82f6;
+  --border: #dde7e3;
+  --shadow-sm: 0 2px 8px rgba(18, 33, 28, 0.05);
+  --shadow-md: 0 8px 24px rgba(18, 33, 28, 0.08);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  --bg-primary: #0d1614;
+  --bg-surface: #15221f;
+  --bg-elevated: #1e302c;
+  --text-primary: #ecfdf5;
+  --text-secondary: #9ab3ab;
+  --text-muted: #647d75;
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-light: rgba(16, 185, 129, 0.18);
+  --danger: #f87171;
+  --danger-light: rgba(248, 113, 113, 0.16);
+  --warning: #fbbf24;
+  --warning-light: rgba(251, 191, 36, 0.16);
+  --info: #60a5fa;
+  --border: #253b36;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease, color 0.25s ease;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+h1 { font-size: 1.75rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.1rem; }
+
+p {
+  color: var(--text-secondary);
+}
+
+.num, .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: 1rem;
+  color: inherit;
+}
