@@ -1,4 +1,4 @@
-// js/app.js — Точка входа, роутинг между экранами, связывание состояния, темы и демо-режима
+// js/app.js — Точка входа, роутинг, двойное подтверждение сброса, авто-адаптация через интернет и аналитика
 import { getState, setState, subscribe } from './state.js';
 import {
   initDB,
@@ -9,21 +9,25 @@ import {
   saveProfile,
   saveWeightEntry,
   saveAdaptationLog,
+  clearAllDatabase,
   exportFullDatabaseJSON,
   importFullDatabaseJSON,
   getSavedTheme,
-  saveTheme,
-  saveMeal
+  saveTheme
 } from './storage.js';
-import { getTodayISO, round1, generateId } from './utils.js';
-import { evaluateAdaptiveStatus, applyProgramAdaptation } from './adaptive.js';
+import { getTodayISO, round1 } from './utils.js';
+import { evaluateAdaptiveStatus, applyProgramAdaptationWithInternet } from './adaptive.js';
+import { buildActivityAndDietPlan } from './recommendations.js';
+import { computeExtendedStatistics } from './stats.js';
+import { calculateDetailedBodyMetrics } from './calculations.js';
 import { renderProgressRing } from './components/progress-ring.js';
 import { showToast } from './components/toast.js';
 import { initDiaryModule, renderDiaryScreen, getDayTotals } from './diary.js';
 import { initCalendarModule, renderCalendarScreen } from './calendar.js';
 import { initChartsModule, renderAllCharts } from './charts.js';
 import { initOnboardingModule, populateProfileForm } from './onboarding.js';
-import { buildNutritionProgram } from './calculations.js';
+
+let isAutoAdapting = false;
 
 async function loadInitialData() {
   await initDB();
@@ -54,9 +58,37 @@ async function loadInitialData() {
 
   populateProfileForm();
 
-  // Если профиль ещё не создан — открываем вкладку «Профиль и программа»
   if (!profile) {
     switchScreen('profile');
+  } else {
+    await checkAndRunAutoAdaptation();
+  }
+}
+
+/**
+ * Автоматически перестраивает программу и ищет рекомендации в интернете,
+ * если за 2 недели вес не изменился или вырос.
+ */
+async function checkAndRunAutoAdaptation() {
+  if (isAutoAdapting) return;
+  const state = getState();
+  const evalRes = evaluateAdaptiveStatus(state);
+
+  if (evalRes.canAdapt) {
+    isAutoAdapting = true;
+    try {
+      const { updatedProfile, logEntry } = await applyProgramAdaptationWithInternet(state.profile, evalRes);
+      await saveProfile(updatedProfile);
+      await saveAdaptationLog(logEntry);
+
+      setState({
+        profile: updatedProfile,
+        adaptationLogs: [logEntry, ...state.adaptationLogs]
+      });
+      showToast(`Авто-адаптация: программа перестроена (${logEntry.oldKcal} → ${logEntry.newKcal} ккал)`);
+    } finally {
+      isAutoAdapting = false;
+    }
   }
 }
 
@@ -88,6 +120,13 @@ function renderDashboardScreen() {
     return;
   }
 
+  const metrics = calculateDetailedBodyMetrics({
+    weightKg: profile.currentWeight,
+    heightCm: profile.height,
+    age: profile.age,
+    gender: profile.gender
+  });
+
   if (heroCurrentEl) heroCurrentEl.textContent = `${profile.currentWeight} кг`;
   if (heroTargetEl) heroTargetEl.textContent = `${profile.targetWeight} кг`;
   const toLose = round1(profile.currentWeight - profile.targetWeight);
@@ -95,7 +134,7 @@ function renderDashboardScreen() {
     heroDiffEl.textContent = toLose > 0 ? `Осталось сбросить: ${toLose} кг` : 'Цель достигнута!';
   }
   if (heroBmiEl) {
-    heroBmiEl.textContent = `${profile.bmi} (${profile.bmiCategory})`;
+    heroBmiEl.textContent = `${metrics.bmi} (${metrics.obesityDegree})`;
   }
   if (formulaBadgeEl) {
     formulaBadgeEl.textContent = `${profile.formulaName} • BMR: ${profile.bmr} ккал • TDEE: ${profile.tdee} ккал`;
@@ -108,11 +147,7 @@ function renderDashboardScreen() {
       safetyBannerEl.innerHTML = `
         <div>
           <strong>Детский/подростковый профиль (${profile.age} лет):</strong>
-          Используются педиатрические уравнения ВОЗ.
-          ${profile.exceedsSafePediatricDeficit
-            ? ' <strong>Внимание: выбранный дефицит выше 15%!</strong> Для растущего организма жёсткий дефицит опасен.'
-            : ' Установлен щадящий безопасный дефицит.'}
-          Обязательна консультация с врачом-педиатром.
+          Используются педиатрические уравнения ВОЗ. Обязательна консультация с врачом-педиатром.
         </div>
       `;
     } else {
@@ -120,11 +155,10 @@ function renderDashboardScreen() {
     }
   }
 
-  // Кольцо калорий
+  // Кольцо калорий за сегодня
   const ringContainer = document.getElementById('dash-progress-ring');
   renderProgressRing(ringContainer, totals.kcal, profile.targetKcal);
 
-  // Прогресс-бары БЖУ
   const updateMacroBar = (prefix, currentVal, targetVal) => {
     const labelEl = document.getElementById(`macro-${prefix}-val`);
     const fillEl = document.getElementById(`macro-${prefix}-fill`);
@@ -139,9 +173,133 @@ function renderDashboardScreen() {
   updateMacroBar('f', totals.f, profile.macros.fat);
   updateMacroBar('c', totals.c, profile.macros.carbs);
 
-  // Карточка адаптивной системы (проверка плато/роста веса)
+  renderBodyCompositionCard(metrics, profile);
+  renderRecommendationsCard(profile);
+  renderExtendedStatsCard(state);
   renderAdaptiveStatusBox();
   renderAllCharts();
+}
+
+function renderBodyCompositionCard(metrics, profile) {
+  const container = document.getElementById('body-composition-box');
+  if (!container) return;
+
+  const excessBadgeColor = metrics.bmi >= 30 ? 'var(--danger)' : (metrics.bmi >= 25 ? 'var(--warning)' : 'var(--accent)');
+  const excessSign = metrics.excessWeightPct > 0 ? `+${metrics.excessWeightPct}%` : `${metrics.excessWeightPct}%`;
+
+  container.innerHTML = `
+    <div class="hero-weight-stats" style="margin-top:0;">
+      <div class="stat-box" style="border-left: 4px solid ${excessBadgeColor};">
+        <div class="stat-label">Классификация и степень ожирения</div>
+        <div class="stat-value" style="font-size:1.1rem;">${metrics.obesityDegree}</div>
+        <div class="stat-sub">ИМТ: <strong>${metrics.bmi}</strong> • Риск: ${metrics.riskLevel}</div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Доля жира в организме (оценка)</div>
+        <div class="stat-value" style="font-size:1.25rem; color:var(--warning);">${metrics.bodyFatPct}%</div>
+        <div class="stat-sub">Жировая масса: <strong>${metrics.fatMassKg} кг</strong> | Сухая масса: <strong>${metrics.leanMassKg} кг</strong></div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Отклонение от оптимума по росту (${profile.height} см)</div>
+        <div class="stat-value" style="font-size:1.25rem; color:${excessBadgeColor};">${excessSign}</div>
+        <div class="stat-sub">
+          Норма для роста: <strong>${metrics.idealWeightMin}–${metrics.idealWeightMax} кг</strong>
+          ${metrics.excessWeightKg > 0 ? `(избыток above нормы: ${metrics.excessWeightKg} кг)` : '(в пределах нормы)'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRecommendationsCard(profile) {
+  const container = document.getElementById('recommendations-box');
+  if (!container) return;
+
+  const plan = buildActivityAndDietPlan(profile);
+  if (!plan) return;
+
+  const { workoutPlan, dietStrategy } = plan;
+  const internetBlock = profile.lastInternetProtocol;
+
+  container.innerHTML = `
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+      <div class="stat-box">
+        <div style="font-weight:700; color:var(--accent); margin-bottom:8px;">🏃 ${workoutPlan.title}</div>
+        <p style="font-size:0.86rem; margin-bottom:6px;"><strong>Дневная норма шагов:</strong> ${workoutPlan.stepsGoal}</p>
+        <p style="font-size:0.86rem; margin-bottom:6px;"><strong>Кардио-нагрузка:</strong> ${workoutPlan.cardio}</p>
+        <p style="font-size:0.86rem; margin-bottom:6px;"><strong>Силовые / тонус:</strong> ${workoutPlan.strength}</p>
+        <p style="font-size:0.84rem; color:var(--text-muted);"><strong>Пульсовая зона:</strong> ${workoutPlan.intensity}</p>
+      </div>
+
+      <div class="stat-box">
+        <div style="font-weight:700; color:var(--accent); margin-bottom:8px;">🥗 ${dietStrategy.title}</div>
+        <p style="font-size:0.86rem; margin-bottom:8px;"><strong>Режим приёмов пищи:</strong> ${dietStrategy.mealsCount}</p>
+        <ul style="padding-left:18px; font-size:0.85rem; color:var(--text-secondary); display:flex; flex-direction:column; gap:5px;">
+          ${dietStrategy.principles.map(p => `<li>${p}</li>`).join('')}
+        </ul>
+      </div>
+    </div>
+
+    ${internetBlock ? `
+      <div style="margin-top:14px; padding:14px; border-radius:var(--radius-md); background:var(--accent-light); border:1px solid var(--accent);">
+        <div style="font-weight:700; font-size:0.9rem; margin-bottom:4px;">🌐 Протокол анти-плато (${internetBlock.sourceLabel})</div>
+        <p style="font-size:0.82rem; margin-bottom:8px;">${internetBlock.wikiNote}</p>
+        <ul style="padding-left:18px; font-size:0.84rem; color:var(--text-primary);">
+          ${internetBlock.protocolSteps.map(s => `<li>${s}</li>`).join('')}
+        </ul>
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderExtendedStatsCard(state) {
+  const container = document.getElementById('extended-stats-box');
+  if (!container) return;
+
+  const stats = computeExtendedStatistics(state);
+  if (!stats) return;
+
+  container.innerHTML = `
+    <div class="hero-weight-stats" style="margin-top:0;">
+      <div class="stat-box">
+        <div class="stat-label">Прогресс к цели</div>
+        <div class="stat-value" style="color:var(--accent);">${stats.goalCompletionPct}%</div>
+        <div class="stat-sub">Сброшено: <strong>${stats.totalLostKg} кг</strong> | Осталось: <strong>${stats.remainingKg} кг</strong></div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Средние ккал и белок (14 дн.)</div>
+        <div class="stat-value">${stats.avgKcal14} ккал</div>
+        <div class="stat-sub">Средний белок: <strong>${stats.avgProtein14} г/день</strong></div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Дисциплина дневника (14 дн.)</div>
+        <div class="stat-value">${stats.adherencePct}%</div>
+        <div class="stat-sub">Заполнено <strong>${stats.loggedDays14} из 14 дн.</strong> (всего дней: ${stats.totalLoggedDays})</div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Накопленный дефицит (14 дн.)</div>
+        <div class="stat-value">${stats.cumulativeDeficitKcal} ккал</div>
+        <div class="stat-sub">Эквивалент сожжённого жира: <strong>≈ ${stats.estimatedFatBurnedKg} кг</strong></div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Темп изменения веса</div>
+        <div class="stat-value">${stats.weeklyRateKg} кг/нед</div>
+        <div class="stat-sub">Расчётный по дефициту: <strong>-${stats.theoreticalWeeklyLossKg} кг/нед</strong></div>
+      </div>
+
+      <div class="stat-box">
+        <div class="stat-label">Прогноз достижения цели</div>
+        <div class="stat-value" style="font-size:1rem;">${stats.estimatedTargetDate}</div>
+        <div class="stat-sub">${stats.estimatedDaysToGoal > 0 ? `Около ${stats.estimatedDaysToGoal} дн. при текущем темпе` : 'Вы у цели!'}</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderAdaptiveStatusBox() {
@@ -158,28 +316,42 @@ function renderAdaptiveStatusBox() {
 
   statusContainer.innerHTML = `
     <div style="padding: 14px; border-radius: var(--radius-md); background: var(--bg-elevated); border-left: 4px solid ${badgeColor};">
-      <div style="font-weight: 700; margin-bottom: 4px;">Статус адаптивного алгоритма:</div>
-      <p style="font-size: 0.88rem; color: var(--text-primary); margin-bottom: 10px;">${evalRes.message}</p>
-      ${evalRes.canAdapt ? `
-        <button type="button" class="btn btn-primary btn-sm" id="btn-apply-adaptation">
-          Применить адаптацию (${evalRes.oldKcal} → ${evalRes.proposedKcal} ккал)
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="font-weight: 700;">Статус автоматического пересмотра (контроль каждые 14 дней):</div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-force-internet-rebuild">
+          🔄 Обновить программу через интернет сейчас
         </button>
-      ` : ''}
+      </div>
+      <p style="font-size: 0.88rem; color: var(--text-primary); margin-top: 6px;">${evalRes.message}</p>
     </div>
   `;
 
-  const applyBtn = statusContainer.querySelector('#btn-apply-adaptation');
-  if (applyBtn) {
-    applyBtn.addEventListener('click', async () => {
-      const { updatedProfile, logEntry } = applyProgramAdaptation(state.profile, evalRes);
+  const forceBtn = statusContainer.querySelector('#btn-force-internet-rebuild');
+  if (forceBtn) {
+    forceBtn.addEventListener('click', async () => {
+      if (!state.profile) return;
+      forceBtn.disabled = true;
+      forceBtn.textContent = 'Синхронизация с онлайн-базой...';
+      const manualEval = {
+        status: 'plateau',
+        avgPrev: state.profile.currentWeight,
+        avgRecent: state.profile.currentWeight,
+        reductionPct: state.profile.isPediatric ? 5 : 6,
+        oldKcal: state.profile.targetKcal,
+        proposedKcal: Math.max(
+          state.profile.isPediatric ? Math.round(state.profile.bmr * 1.05) : Math.max(1200, Math.round(state.profile.bmr * 0.95)),
+          Math.round(state.profile.targetKcal * 0.94)
+        ),
+        reasonLabel: 'Запрос пересчёта программы с онлайн-поиском'
+      };
+      const { updatedProfile, logEntry } = await applyProgramAdaptationWithInternet(state.profile, manualEval);
       await saveProfile(updatedProfile);
       await saveAdaptationLog(logEntry);
-
       setState({
         profile: updatedProfile,
         adaptationLogs: [logEntry, ...state.adaptationLogs]
       });
-      showToast(`Цель адаптирована: ${logEntry.oldKcal} → ${logEntry.newKcal} ккал`);
+      showToast('Новые рекомендации и программа загружены и применены!');
     });
   }
 
@@ -189,7 +361,7 @@ function renderAdaptiveStatusBox() {
     } else {
       logsContainer.innerHTML = state.adaptationLogs.map(log => `
         <div class="log-item">
-          <div style="display:flex; justify-content:space-between; font-weight:700;">
+          <div style="display:flex; justify-content:space-between; font-weight:700; flex-wrap:wrap; gap:6px;">
             <span>${log.date} — ${log.reason}</span>
             <span class="mono" style="color:var(--accent);">${log.oldKcal} → ${log.newKcal} ккал (-${log.reductionPct}%)</span>
           </div>
@@ -201,14 +373,12 @@ function renderAdaptiveStatusBox() {
 }
 
 function initHeaderAndQuickActions() {
-  // Переключение вкладок
   document.querySelectorAll('.nav-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       switchScreen(btn.dataset.screen);
     });
   });
 
-  // Переключение светлой/тёмной темы
   const themeBtn = document.getElementById('btn-toggle-theme');
   if (themeBtn) {
     themeBtn.addEventListener('click', () => {
@@ -220,7 +390,39 @@ function initHeaderAndQuickActions() {
     });
   }
 
-  // Быстрое логирование утреннего веса на главном экране
+  // СБРОС ВСЕХ ДАННЫХ С ДВОЙНЫМ ПОДТВЕРЖДЕНИЕМ
+  const resetBtn = document.getElementById('btn-reset-all');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', async () => {
+      // Шаг 1: Первое подтверждение
+      const step1 = window.confirm(
+        'ВНИМАНИЕ (Шаг 1 из 2): Вы действительно хотите полностью удалить профиль, всю историю взвешиваний, дневник питания и журнал адаптаций?'
+      );
+      if (!step1) return;
+
+      // Шаг 2: Второе подтверждение с вводом контрольного слова
+      const step2 = window.prompt(
+        'ПОДТВЕРЖДЕНИЕ (Шаг 2 из 2): Это действие необратимо. Введите слово УДАЛИТЬ заглавными буквами для полного сброса:'
+      );
+      if (step2 !== 'УДАЛИТЬ') {
+        showToast('Сброс отменён: контрольное слово не введено.', 'warning');
+        return;
+      }
+
+      await clearAllDatabase();
+      setState({
+        profile: null,
+        selectedDate: getTodayISO(),
+        mealsByDate: {},
+        weightHistory: [],
+        adaptationLogs: []
+      });
+      switchScreen('profile');
+      showToast('Все данные приложения полностью сброшены.', 'warning');
+    });
+  }
+
+  // Быстрое логирование веса за любую дату
   const quickWeightForm = document.getElementById('quick-weight-form');
   if (quickWeightForm) {
     quickWeightForm.addEventListener('submit', async (e) => {
@@ -235,7 +437,7 @@ function initHeaderAndQuickActions() {
         return;
       }
 
-      const entry = { date: dateISO, weight: val, source: 'Утреннее взвешивание' };
+      const entry = { date: dateISO, weight: val, source: 'Взвешивание' };
       await saveWeightEntry(entry);
 
       const state = getState();
@@ -246,13 +448,25 @@ function initHeaderAndQuickActions() {
 
       let nextProfile = state.profile;
       if (nextProfile && dateISO >= getTodayISO()) {
-        nextProfile = { ...nextProfile, currentWeight: val };
+        const updatedMetrics = calculateDetailedBodyMetrics({
+          weightKg: val,
+          heightCm: nextProfile.height,
+          age: nextProfile.age,
+          gender: nextProfile.gender
+        });
+        nextProfile = {
+          ...nextProfile,
+          currentWeight: val,
+          ...updatedMetrics,
+          bmiCategory: updatedMetrics.category
+        };
         await saveProfile(nextProfile);
       }
 
       setState({ weightHistory: nextWeights, profile: nextProfile });
       input.value = '';
       showToast(`Вес ${val} кг за ${dateISO} сохранён`);
+      await checkAndRunAutoAdaptation();
     });
   }
 
@@ -289,70 +503,6 @@ function initHeaderAndQuickActions() {
         showToast('Ошибка импорта JSON: ' + err.message, 'error');
       }
       importInput.value = '';
-    });
-  }
-
-  // Кнопка заполнения демо-данных за 14 дней (для мгновенной демонстрации плато и графиков)
-  const demoBtn = document.getElementById('btn-load-demo');
-  if (demoBtn) {
-    demoBtn.addEventListener('click', async () => {
-      const baseData = {
-        age: 29,
-        gender: 'female',
-        height: 168,
-        currentWeight: 72.4,
-        targetWeight: 63.0,
-        activity: 1.375,
-        deficitPct: 18
-      };
-      const prog = buildNutritionProgram(baseData);
-      const demoProfile = {
-        ...baseData,
-        startWeight: 74.0,
-        ...prog,
-        updatedAt: getTodayISO()
-      };
-      await saveProfile(demoProfile);
-
-      const today = new Date();
-      const simulatedWeights = [
-        72.6, 72.5, 72.4, 72.5, 72.4, 72.5, 72.4, // предыдущая неделя (~72.47)
-        72.5, 72.4, 72.5, 72.4, 72.5, 72.4, 72.4  // текущая неделя (~72.44 -> плато!)
-      ];
-
-      for (let i = 13; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        const iso = d.toISOString().slice(0, 10);
-        const w = simulatedWeights[13 - i];
-        await saveWeightEntry({ date: iso, weight: w, source: 'Утром натощак' });
-
-        // Создаём 3 приёма пищи на каждый из последних 7 дней
-        if (i <= 6) {
-          const m1 = {
-            id: generateId('meal'), date: iso, mealName: 'Завтрак', time: '08:30',
-            foodName: 'Овсяная каша варёная на воде', grams: 250, weightBefore: w,
-            kcal100: 88, p100: 3, f100: 1.7, c100: 15, kcal: 220, p: 7.5, f: 4.3, c: 37.5
-          };
-          const m2 = {
-            id: generateId('meal'), date: iso, mealName: 'Обед', time: '13:30',
-            foodName: 'Куриная грудка (филе отварное/запечённое)', grams: 220, weightBefore: null,
-            kcal100: 165, p100: 31, f100: 3.6, c100: 0, kcal: 363, p: 68.2, f: 7.9, c: 0
-          };
-          const m3 = {
-            id: generateId('meal'), date: iso, mealName: 'Ужин', time: '19:00',
-            foodName: 'Лосось / Сёмга запечённая', grams: 200, weightBefore: null,
-            kcal100: 208, p100: 20.4, f100: 13.4, c100: 0, kcal: 416, p: 40.8, f: 26.8, c: 0
-          };
-          await saveMeal(m1);
-          await saveMeal(m2);
-          await saveMeal(m3);
-        }
-      }
-
-      await loadInitialData();
-      switchScreen('dashboard');
-      showToast('Загружены демо-данные за 14 дней с имитацией плато веса!');
     });
   }
 }
